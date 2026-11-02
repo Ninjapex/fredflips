@@ -103,6 +103,32 @@ public class FlipLedgerTest
 	}
 
 	@Test
+	public void periodStats()
+	{
+		FlipLedger ledger = FlipLedger.build(Arrays.asList(
+			buy(1, 3, 3_000),
+			sell(5, 1, 1_200),    // +1,200 - 24 tax - 1,000 = +176
+			sell(20, 1, 900),     // 900 - 18 - 1,000 = -118
+			sell(30, 1, 1_500)),  // 1,500 - 30 - 1,000 = +470
+			Collections.emptySet(), 0);
+
+		FlipLedger.Stats all = ledger.statsSince(0);
+		assertEquals(3, all.getFlips());
+		assertEquals(2, all.getWins());
+		assertEquals(1, all.getLosses());
+		assertEquals(176 - 118 + 470, all.getTotalProfit());
+		assertEquals(24 + 18 + 30, all.getTaxPaid());
+		assertEquals(3_000, all.getInvested());
+		assertEquals(470, all.getBest().getProfit());
+		assertEquals(-118, all.getWorst().getProfit());
+		assertEquals(66, all.getWinRatePercent());
+
+		FlipLedger.Stats recent = ledger.statsSince(20);
+		assertEquals(2, recent.getFlips());
+		assertEquals(-118 + 470, recent.getTotalProfit());
+	}
+
+	@Test
 	public void profitSinceOnlyCountsRecentSells()
 	{
 		FlipLedger ledger = FlipLedger.build(Arrays.asList(

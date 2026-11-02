@@ -36,7 +36,7 @@ class TabBar extends JPanel
 	void addTab(String name)
 	{
 		JLabel tab = new JLabel(name, SwingConstants.CENTER);
-		tab.setFont(FontManager.getRunescapeSmallFont());
+		tab.setFont(Ui.SMALL_BOLD);
 		tab.setOpaque(true);
 		tab.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		tab.addMouseListener(new MouseAdapter()
@@ -95,10 +95,10 @@ class TabBar extends JPanel
 
 	private static void style(JLabel tab, boolean active)
 	{
-		tab.setBackground(active ? ColorScheme.DARK_GRAY_HOVER_COLOR : ColorScheme.DARKER_GRAY_COLOR);
-		tab.setForeground(active ? Color.WHITE : ColorScheme.LIGHT_GRAY_COLOR);
+		tab.setBackground(active ? Ui.HOVER_BG : Ui.FIELD_BG);
+		tab.setForeground(active ? Color.WHITE : new Color(0xAAAAAA));
 		tab.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 0, 2, 0, active ? ColorScheme.BRAND_ORANGE : ColorScheme.DARKER_GRAY_COLOR),
-			BorderFactory.createEmptyBorder(5, 2, 5, 2)));
+			BorderFactory.createMatteBorder(0, 0, 2, 0, active ? Ui.ORANGE : Ui.FIELD_BG),
+			BorderFactory.createEmptyBorder(6, 2, 6, 2)));
 	}
 }

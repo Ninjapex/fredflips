@@ -98,6 +98,23 @@ public class FlipScoreTest
 	}
 
 	@Test
+	public void swapReplacesOneItemWithTheNextBest()
+	{
+		FlipPlan plan = FlipPlan.build(Arrays.asList(
+			candidate(1, 100, 1_000, 80, Signal.STABLE),
+			candidate(2, 90, 1_000, 80, Signal.STABLE),
+			candidate(3, 80, 1_000, 80, Signal.STABLE)), 3_000_000, 2, 55);
+		assertEquals(2, plan.getEntries().size());
+
+		FlipPlan swapped = plan.swap(1);
+		assertEquals(3, swapped.getEntries().get(0).getFlip().getItemId());
+		assertEquals(2, swapped.getEntries().get(1).getFlip().getItemId());
+		assertEquals(plan.getCreatedAt(), swapped.getCreatedAt());
+		// Nothing left to swap in
+		assertEquals(swapped, swapped.swap(2));
+	}
+
+	@Test
 	public void planNeedsCash()
 	{
 		assertTrue(FlipPlan.build(Collections.singletonList(candidate(1, 100, 1_000, 80, Signal.STABLE)), 0, 8, 55)
@@ -108,6 +125,6 @@ public class FlipScoreTest
 	{
 		return new FlipCandidate(id, "item" + id, false, 1_000, buyPrice, buyPrice + margin + 30, 30, margin,
 			margin * 100.0 / buyPrice, 1_000, margin * 1_000, 5_000, 5_000, 100_000, 0, 0,
-			confidence, Tier.fromConfidence(confidence), signal);
+			confidence, Tier.fromConfidence(confidence), signal, 0, 0, 1);
 	}
 }

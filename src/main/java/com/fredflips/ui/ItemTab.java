@@ -43,8 +43,14 @@ class ItemTab extends JPanel
 	private final JPanel periodButtons = new JPanel(new GridLayout(1, 0, 2, 0));
 	private final JPanel indicators = Ui.card();
 	private final JPanel volume = Ui.card();
+	private final JPanel range = Ui.card();
+	private final JPanel trend = Ui.card();
+	private final JPanel liquidity = Ui.card();
+	private final JPanel projection = Ui.card();
+	private FlipCandidate numbers;
 
 	private int itemId = -1;
+	private final JLabel star = new JLabel("\u2606");
 	private ChartPeriod period;
 
 	ItemTab(ItemManager itemManager, PanelActions actions, FredFlipsConfig config)
@@ -105,6 +111,27 @@ class ItemTab extends JPanel
 		return itemId;
 	}
 
+	/**
+	 * Show search results for text typed in the header search box.
+	 */
+	/**
+	 * Filled star when the open item is a favourite.
+	 */
+	void refreshStar()
+	{
+		boolean favourite = itemId >= 0 && actions.isFavourite(itemId);
+		star.setText(favourite ? "\u2605" : "\u2606");
+		star.setForeground(favourite ? Ui.ORANGE : Ui.MUTED);
+	}
+
+	void searchFor(String query)
+	{
+		if (!search.getText().equals(query))
+		{
+			search.setText(query);
+		}
+	}
+
 	ChartPeriod getPeriod()
 	{
 		return period;
@@ -159,6 +186,11 @@ class ItemTab extends JPanel
 		itemManager.getImage(item.getId()).addTo(icon);
 		header.add(icon, BorderLayout.WEST);
 		header.add(Ui.heading(item.getName()), BorderLayout.CENTER);
+		star.setFont(Ui.TITLE);
+		star.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+		star.setToolTipText("Add to or remove from Favs");
+		refreshStar();
+		header.add(star, BorderLayout.EAST);
 		Ui.addSpaced(detail, header);
 
 		JPanel buttons = new JPanel(new GridLayout(1, 2, 4, 0));
@@ -209,8 +241,29 @@ class ItemTab extends JPanel
 			volume.add(Ui.muted("Loading history..."));
 			Ui.addSpaced(detail, volume);
 		}
+		this.numbers = numbers;
+		addLoadingSection(config.itemPriceRange(), "Price range (90d)", range);
+		addLoadingSection(config.itemTrend(), "Trend", trend);
+		addLoadingSection(config.itemLiquidity(), "Liquidity", liquidity);
+		addLoadingSection(config.itemProjection(), "Projection", projection);
 		Ui.addSpaced(detail, Ui.note("Indicators describe what has happened, not what will happen. Use them as one input, not a guarantee."));
 
+		detail.revalidate();
+		detail.repaint();
+	}
+
+	/**
+	 * "Limit used 300 / 1,000 - resets in 1h 12m", under the live prices.
+	 */
+	void showLimitUsage(int forItemId, long bought, int limit, long resetsInMillis)
+	{
+		if (forItemId != itemId)
+		{
+			return;
+		}
+		String text = "Limit used " + Ui.gp(bought) + " / " + Ui.gp(limit)
+			+ (bought > 0 ? " - resets in " + Ui.duration(resetsInMillis) : "");
+		Ui.addSpaced(detail, Ui.label(text, bought >= limit ? Ui.BAD : Ui.MUTED));
 		detail.revalidate();
 		detail.repaint();
 	}
@@ -264,6 +317,77 @@ class ItemTab extends JPanel
 
 		detail.revalidate();
 		detail.repaint();
+	}
+
+	private void addLoadingSection(boolean show, String title, JPanel card)
+	{
+		if (!show)
+		{
+			return;
+		}
+		detail.add(Ui.heading(title));
+		card.removeAll();
+		card.add(Ui.muted("Loading..."));
+		Ui.addSpaced(detail, card);
+	}
+
+	/**
+	 * Fills the sections that need the item's daily price history.
+	 */
+	void showLongTerm(int forItemId, com.fredflips.insights.LongTermInsights lt, int buyLimit)
+	{
+		if (forItemId != itemId)
+		{
+			return;
+		}
+
+		range.removeAll();
+		range.add(Ui.row("90d range", lt.getLow90() == null ? "-" : Ui.shortGp(lt.getLow90()) + " - " + Ui.shortGp(lt.getHigh90())));
+		range.add(Ui.row("90d position", lt.getPosition90Percent() == null ? "-"
+			: String.format("%.0f%% of range", lt.getPosition90Percent()), Ui.GOOD));
+		range.add(Ui.row("Drawdown", lt.getDrawdownPercent() == null ? "-"
+			: String.format("%.1f%% below 90d high", lt.getDrawdownPercent())));
+		range.add(Ui.row("90d low was", lt.getDaysSinceLow90() == null ? "-" : daysAgo(lt.getDaysSinceLow90())));
+		range.add(Ui.row("90d high was", lt.getDaysSinceHigh90() == null ? "-" : daysAgo(lt.getDaysSinceHigh90())));
+
+		trend.removeAll();
+		trend.add(Ui.row("MA 7d / 30d", lt.getMa7() == null || lt.getMa30() == null ? "-"
+			: Ui.shortGp(Math.round(lt.getMa7())) + " / " + Ui.shortGp(Math.round(lt.getMa30()))));
+		trend.add(Ui.row("MA cross", lt.maCrossLabel(), lt.getMa7() == null || lt.getMa30() == null ? Color.WHITE
+			: lt.getMa7() >= lt.getMa30() ? Ui.GOOD : Ui.BAD));
+		trend.add(Ui.row("Change 30d", Ui.percent(lt.getChange30dPercent()), Ui.changeColor(lt.getChange30dPercent())));
+		trend.add(Ui.row("Bollinger", lt.getBollingerPercent() == null ? "-" : String.format("%.0f%% of band", lt.getBollingerPercent())));
+
+		liquidity.removeAll();
+		liquidity.add(Ui.row("Margin inverted", lt.getMarginInvertedHours() == null ? "-"
+			: lt.getMarginInvertedHours() + "h of last 24", lt.getMarginInvertedHours() != null && lt.getMarginInvertedHours() > 6 ? Ui.WARN : Ui.GOOD));
+		if (numbers != null)
+		{
+			long sellers = Math.max(1, numbers.getSellersPerHour());
+			long buyers = Math.max(1, numbers.getBuyersPerHour());
+			if (buyLimit > 0)
+			{
+				liquidity.add(Ui.row("Est. limit fill", "~" + Ui.age(buyLimit * 60L / sellers)));
+			}
+			long quantity = Math.max(1, numbers.getQuantity());
+			liquidity.add(Ui.row("Est. fill (x" + Ui.gp(quantity) + ")",
+				"buy ~" + Ui.age(quantity * 60 / sellers) + " \u00B7 sell ~" + Ui.age(quantity * 60 / buyers)));
+		}
+
+		projection.removeAll();
+		projection.add(Ui.row("30 days", lt.getProjection30Low() == null ? "-"
+			: Ui.shortGp(lt.getProjection30Low()) + " - " + Ui.shortGp(lt.getProjection30High())));
+		projection.add(Ui.row("3 months", lt.getProjection90Low() == null ? "-"
+			: Ui.shortGp(lt.getProjection90Low()) + " - " + Ui.shortGp(lt.getProjection90High())));
+		projection.add(Ui.muted("About 2 in 3 chance of staying in range"));
+
+		detail.revalidate();
+		detail.repaint();
+	}
+
+	private static String daysAgo(int days)
+	{
+		return days == 0 ? "today" : days == 1 ? "yesterday" : days + " days ago";
 	}
 
 	void showInsightsError(int forItemId)

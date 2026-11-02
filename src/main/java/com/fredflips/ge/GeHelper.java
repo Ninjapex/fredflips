@@ -46,6 +46,10 @@ public class GeHelper
 	private static final long SEARCH_REQUEST_TIMEOUT_MS = 120_000;
 
 	private static final int TEXT_COLOR = 0x800000;
+	private static final int LADDER_LEFT = 10;
+	private static final int LADDER_GAP = 14;
+	// Rough width of one character in the bold chatbox font, to lay the ladder out left to right.
+	private static final int LADDER_CHAR_WIDTH = 6;
 	private static final int HOVER_COLOR = 0xFFFFFF;
 
 	private final Client client;
@@ -63,6 +67,17 @@ public class GeHelper
 
 	private String pendingSearchName;
 	private long pendingSearchUntil;
+
+	// What the open price box would be filled with by each hotkey, or null when no price box is open.
+	private volatile Long hotkeyQuick;
+	private volatile Long hotkeyFredFlips;
+	private volatile Long hotkeyPatient;
+	@Setter
+	private String quickKeyLabel = "I";
+	@Setter
+	private String fredFlipsKeyLabel = "O";
+	@Setter
+	private String patientKeyLabel = "P";
 
 	@Inject
 	GeHelper(Client client, ClientThread clientThread)
@@ -103,6 +118,10 @@ public class GeHelper
 		else if (mode == MODE_NUMBER || mode == MODE_LARGE_NUMBER)
 		{
 			clientThread.invokeLater(this::addSuggestions);
+		}
+		else
+		{
+			clearHotkeys();
 		}
 	}
 
@@ -154,17 +173,60 @@ public class GeHelper
 			return;
 		}
 
-		if (askingPrice && suggestion.getPrice() != null && suggestion.getPrice() > 0)
+		if (askingPrice)
 		{
-			String label = suggestion.getSource() + (sell ? " sell price: " : " buy price: ")
-				+ QuantityFormatter.formatNumber(suggestion.getPrice()) + " gp";
-			addClickableLine(layer, label, "Set price", suggestion.getPrice());
+			// One row: Quick [I] 4,300   FredFlips [O] 4,256   Patient [P] 4,200
+			hotkeyQuick = positive(suggestion.getQuickPrice());
+			hotkeyFredFlips = positive(suggestion.getPrice());
+			hotkeyPatient = positive(suggestion.getPatientPrice());
+			int x = LADDER_LEFT;
+			x = addLadderEntry(layer, "Quick", quickKeyLabel, hotkeyQuick, x);
+			x = addLadderEntry(layer, suggestion.getSource(), fredFlipsKeyLabel, hotkeyFredFlips, x);
+			addLadderEntry(layer, "Patient", patientKeyLabel, hotkeyPatient, x);
 		}
 		else if (askingQuantity && !sell && suggestion.getQuantity() != null && suggestion.getQuantity() > 0)
 		{
 			String label = suggestion.getSource() + " quantity: " + QuantityFormatter.formatNumber(suggestion.getQuantity());
-			addClickableLine(layer, label, "Set quantity", suggestion.getQuantity());
+			addClickableText(layer, label, "Set quantity", suggestion.getQuantity(), LADDER_LEFT);
 		}
+	}
+
+	private int addLadderEntry(Widget layer, String name, String key, Long price, int x)
+	{
+		if (price == null)
+		{
+			return x;
+		}
+		String text = name + " [" + key + "] " + QuantityFormatter.formatNumber(price);
+		addClickableText(layer, text, "Set price", price, x);
+		return x + text.length() * LADDER_CHAR_WIDTH + LADDER_GAP;
+	}
+
+	private static Long positive(Long value)
+	{
+		return value != null && value > 0 ? value : null;
+	}
+
+	/**
+	 * Hotkeys: fill the open price box with the Quick, FredFlips or Patient price. Called from the key listener.
+	 * Returns true if a price box was open and the key was used.
+	 */
+	public boolean pressHotkey(int which)
+	{
+		Long price = which == 0 ? hotkeyQuick : which == 1 ? hotkeyFredFlips : hotkeyPatient;
+		if (price == null)
+		{
+			return false;
+		}
+		clientThread.invokeLater(() -> fillInput(price));
+		return true;
+	}
+
+	private void clearHotkeys()
+	{
+		hotkeyQuick = null;
+		hotkeyFredFlips = null;
+		hotkeyPatient = null;
 	}
 
 	private boolean isGeOfferSetupOpen()
@@ -173,18 +235,19 @@ public class GeHelper
 		return setup != null && !setup.isHidden();
 	}
 
-	private void addClickableLine(Widget layer, String text, String action, long value)
+	private void addClickableText(Widget layer, String text, String action, long value, int x)
 	{
 		Widget line = layer.createChild(-1, WidgetType.TEXT);
 		line.setText(text);
 		line.setTextColor(TEXT_COLOR);
 		line.setFontId(FontID.BOLD_12);
 		line.setYPositionMode(WidgetPositionMode.ABSOLUTE_TOP);
-		line.setOriginalX(10);
+		line.setOriginalX(x);
 		line.setOriginalY(5);
 		line.setOriginalHeight(20);
 		line.setXTextAlignment(WidgetTextAlignment.LEFT);
-		line.setWidthMode(WidgetSizeMode.MINUS);
+		line.setOriginalWidth(text.length() * LADDER_CHAR_WIDTH);
+		line.setWidthMode(WidgetSizeMode.ABSOLUTE);
 		line.setAction(0, action);
 		line.setHasListener(true);
 		line.setOnOpListener((JavaScriptCallback) event -> fillInput(value));

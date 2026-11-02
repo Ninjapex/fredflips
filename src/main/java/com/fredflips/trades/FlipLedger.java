@@ -49,6 +49,81 @@ public class FlipLedger
 		}
 	}
 
+	/**
+	 * Totals for completed flips in a period.
+	 */
+	@Value
+	public static class Stats
+	{
+		int flips;
+		int wins;
+		int losses;
+		long totalProfit;
+		long taxPaid;
+		/**
+		 * What the flipped items cost to buy.
+		 */
+		long invested;
+		CompletedFlip best;
+		CompletedFlip worst;
+
+		/**
+		 * Profit as a percent of what was invested.
+		 */
+		public double getAverageRoiPercent()
+		{
+			return invested == 0 ? 0 : totalProfit * 100.0 / invested;
+		}
+
+		public int getWinRatePercent()
+		{
+			return flips == 0 ? 0 : wins * 100 / flips;
+		}
+	}
+
+	/**
+	 * Stats for flips completed at or after {@code sinceMillis} (0 for all time).
+	 */
+	public Stats statsSince(long sinceMillis)
+	{
+		int count = 0;
+		int wins = 0;
+		int losses = 0;
+		long profit = 0;
+		long tax = 0;
+		long invested = 0;
+		CompletedFlip best = null;
+		CompletedFlip worst = null;
+		for (CompletedFlip flip : completed)
+		{
+			if (flip.getTime() < sinceMillis)
+			{
+				continue;
+			}
+			count++;
+			profit += flip.getProfit();
+			tax += flip.getTax();
+			invested += flip.getCost();
+			if (flip.getProfit() > 0)
+			{
+				wins++;
+			}
+			else if (flip.getProfit() < 0)
+			{
+				losses++;
+			}
+			if (best == null || flip.getProfit() > best.getProfit())
+			{
+				best = flip;
+			}
+			if (worst == null || flip.getProfit() < worst.getProfit())
+			{
+				worst = flip;
+			}
+		}
+		return new Stats(count, wins, losses, profit, tax, invested, best, worst);
+	}
+
 	@Value
 	public static class OpenPosition
 	{

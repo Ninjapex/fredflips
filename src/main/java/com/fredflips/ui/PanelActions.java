@@ -16,7 +16,21 @@ public interface PanelActions
 
 	void changeSort(SortOrder order);
 
+	/**
+	 * Save one of FredFlips' settings, e.g. from the Flips filter panel.
+	 */
+	void changeSetting(String key, Object value);
+
+	void toggleFavourite(int itemId);
+
+	boolean isFavourite(int itemId);
+
 	void changeMoverType(MoverType type);
+
+	/**
+	 * Load the ATL (false) or time-of-day arbitrage (true) list, which needs price history.
+	 */
+	void loadHistory(boolean arbitrage);
 
 	void changeMoneySort(MoneySort sort);
 
@@ -32,6 +46,16 @@ public interface PanelActions
 	List<ItemMapping> searchItems(String query);
 
 	void buildPlan();
+
+	/**
+	 * Replace one plan item with the next-best flip.
+	 */
+	void swapPlanEntry(int itemId);
+
+	/**
+	 * Save the cash stack typed in the Plan tab.
+	 */
+	void setCashStack(long gp);
 
 	void clearTradeLog();
 }

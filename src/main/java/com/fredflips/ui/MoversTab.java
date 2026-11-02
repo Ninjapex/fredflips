@@ -6,25 +6,26 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
+import java.awt.GridLayout;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
-import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.SwingConstants;
+import javax.swing.border.EmptyBorder;
 import net.runelite.client.game.ItemManager;
-import net.runelite.client.ui.ColorScheme;
 
 /**
- * Dumps, spikes and high alch profits.
+ * Dumps, spikes and high alch lists, shown inside the Other tab.
  */
 class MoversTab extends JPanel
 {
 	private final ItemManager itemManager;
 	private final PanelActions actions;
-	private final JComboBox<MoverType> typeBox = new JComboBox<>(MoverType.values());
 	private final JLabel description = Ui.note(MoverType.DUMPS.getDescription());
 	private final JPanel list = Ui.stack();
+	private MoverType type = MoverType.DUMPS;
 
 	MoversTab(ItemManager itemManager, PanelActions actions)
 	{
@@ -32,74 +33,85 @@ class MoversTab extends JPanel
 		setOpaque(false);
 		this.itemManager = itemManager;
 		this.actions = actions;
-
-		typeBox.addActionListener(e ->
-		{
-			MoverType type = (MoverType) typeBox.getSelectedItem();
-			description.setText(Ui.wrap(type.getDescription()));
-			actions.changeMoverType(type);
-		});
-
-		JPanel top = Ui.stack();
-		Ui.addSpaced(top, typeBox);
-		Ui.addSpaced(top, description);
-		add(top, BorderLayout.NORTH);
+		add(description, BorderLayout.NORTH);
 		add(list, BorderLayout.CENTER);
 	}
 
 	MoverType getType()
 	{
-		return (MoverType) typeBox.getSelectedItem();
+		return type;
 	}
 
-	void showMovers(List<Mover> movers, MoverType type)
+	void setType(MoverType newType)
 	{
+		type = newType;
+		description.setText(Ui.wrap(newType.getDescription()));
+		list.removeAll();
+		list.add(Ui.note("Loading..."));
+		list.revalidate();
+		actions.changeMoverType(newType);
+	}
+
+	void showMovers(List<Mover> movers, MoverType forType)
+	{
+		if (forType != type)
+		{
+			return;
+		}
 		list.removeAll();
 		if (movers.isEmpty())
 		{
 			list.add(Ui.note("Nothing right now. Prices refresh every minute."));
 		}
+		boolean alternate = false;
 		for (Mover mover : movers)
 		{
-			Ui.addSpaced(list, row(mover, type));
+			Ui.addTight(list, row(mover, alternate));
+			alternate = !alternate;
 		}
 		list.revalidate();
 		list.repaint();
 	}
 
-	private JPanel row(Mover mover, MoverType type)
+	private JPanel row(Mover mover, boolean alternate)
 	{
-		JPanel row = new JPanel(new BorderLayout(6, 0));
-		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		row.setBorder(javax.swing.BorderFactory.createEmptyBorder(5, 5, 5, 5));
+		Color background = alternate ? Ui.ROW_ALT_BG : Ui.ROW_BG;
+		JPanel row = new JPanel(new BorderLayout(8, 0));
+		row.setBackground(background);
+		row.setBorder(new EmptyBorder(8, 10, 8, 10));
 		row.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
 		JLabel icon = new JLabel();
-		icon.setPreferredSize(new Dimension(36, 32));
+		icon.setPreferredSize(new Dimension(32, 32));
+		icon.setVerticalAlignment(SwingConstants.TOP);
 		itemManager.getImage(mover.getItemId()).addTo(icon);
 		row.add(icon, BorderLayout.WEST);
 
-		JPanel text = Ui.card();
+		JPanel text = new JPanel(new GridLayout(0, 1, 0, 1));
 		text.setOpaque(false);
-		text.setBorder(null);
-
-		JPanel title = new JPanel(new BorderLayout());
-		title.setOpaque(false);
-		title.add(Ui.label(mover.getName(), Color.WHITE), BorderLayout.CENTER);
 		if (type == MoverType.HIGH_ALCH)
 		{
-			title.add(Ui.label("+" + Ui.gp(mover.getProfit()) + " ea", Ui.GOOD), BorderLayout.EAST);
-			text.add(title);
-			text.add(Ui.muted("Buy " + Ui.gp(mover.getPrice()) + "  Alch " + Ui.gp(mover.getReferencePrice())));
-			text.add(Ui.muted("Limit " + (mover.getBuyLimit() > 0 ? Ui.gp(mover.getBuyLimit()) : "?")
-				+ "  Vol " + Ui.shortGp(mover.getVolumePerHour()) + "/h"));
+			text.add(Ui.split(Ui.bold(mover.getName(), Color.WHITE), Ui.bold("+" + Ui.shortGp(mover.getProfit()), Ui.GOOD)));
+			text.add(Ui.split(Ui.label("<html><b>Buy:</b>&nbsp; " + Ui.shortGp(mover.getPrice()) + "</html>", Ui.BUY), null));
+			text.add(Ui.split(Ui.label("<html><b>Alch:</b>&nbsp; " + Ui.shortGp(mover.getReferencePrice()) + "</html>", Ui.GOOD), null));
+			text.add(Ui.split(Ui.muted("Limit " + (mover.getBuyLimit() > 0 ? Ui.gp(mover.getBuyLimit()) : "?")),
+				Ui.muted(Ui.shortGp(mover.getVolumePerHour()) + "/hr")));
+		}
+		else if (type == MoverType.VOLATILE)
+		{
+			text.add(Ui.split(Ui.bold(mover.getName(), Color.WHITE), Ui.bold(String.format("%.1f%% gap", mover.getChangePercent()), Ui.WARN)));
+			text.add(Ui.split(Ui.label("<html><b>Buy:</b>&nbsp; " + Ui.shortGp(mover.getPrice()) + "</html>", Ui.BUY), null));
+			text.add(Ui.split(Ui.label("<html><b>Sell:</b>&nbsp; " + Ui.shortGp(mover.getReferencePrice()) + "</html>", Ui.GOOD),
+				Ui.muted(Ui.shortGp(mover.getVolumePerHour()) + "/hr")));
 		}
 		else
 		{
-			title.add(Ui.label(Ui.percent(mover.getChangePercent()), Ui.changeColor(mover.getChangePercent())), BorderLayout.EAST);
-			text.add(title);
-			text.add(Ui.muted("Now " + Ui.gp(mover.getPrice()) + "  Day avg " + Ui.gp(mover.getReferencePrice())));
-			text.add(Ui.muted("Vol " + Ui.shortGp(mover.getVolumePerHour()) + "/h"));
+			text.add(Ui.split(Ui.bold(mover.getName(), Color.WHITE),
+				Ui.bold(Ui.percent(mover.getChangePercent()), Ui.changeColor(mover.getChangePercent()))));
+			text.add(Ui.split(Ui.label("<html><b>" + (type == MoverType.DIPS ? "Last hour" : "Now") + ":</b>&nbsp; "
+				+ Ui.shortGp(mover.getPrice()) + "</html>", type == MoverType.SPIKES ? Ui.GOOD : Ui.BUY), null));
+			text.add(Ui.split(Ui.label("Day average " + Ui.shortGp(mover.getReferencePrice()), Ui.MUTED),
+				Ui.muted(Ui.shortGp(mover.getVolumePerHour()) + "/hr")));
 		}
 		row.add(text, BorderLayout.CENTER);
 
@@ -114,13 +126,13 @@ class MoversTab extends JPanel
 			@Override
 			public void mouseEntered(MouseEvent e)
 			{
-				row.setBackground(ColorScheme.DARK_GRAY_HOVER_COLOR);
+				row.setBackground(Ui.HOVER_BG);
 			}
 
 			@Override
 			public void mouseExited(MouseEvent e)
 			{
-				row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+				row.setBackground(background);
 			}
 		});
 		return row;

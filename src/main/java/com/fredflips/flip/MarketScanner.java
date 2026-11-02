@@ -16,6 +16,14 @@ import net.runelite.api.gameval.ItemID;
 public final class MarketScanner
 {
 	static final int NATURE_RUNE_ID = ItemID.NATURERUNE;
+	static final double DIP_PERCENT = 2;
+	static final double VOLATILE_SPREAD_PERCENT = 5;
+	// Cheap items with a handful of trades swing wildly and aren't worth the effort, so they're left out.
+	static final long MIN_PRICE = 100;
+	// Moves bigger than these are almost always thin-market noise rather than something to trade on.
+	static final double MAX_DROP_PERCENT = 50;
+	static final double MAX_SPIKE_PERCENT = 100;
+	static final double MAX_SPREAD_PERCENT = 40;
 	private static final long SECONDS_PER_MINUTE = 60;
 
 	private MarketScanner()
@@ -50,6 +58,12 @@ public final class MarketScanner
 				case SPIKES:
 					mover = spike(item, latest, hour, day, snapshot.getFetchedAt(), config);
 					break;
+				case DIPS:
+					mover = dip(item, latest, hour, day, snapshot.getFetchedAt(), config);
+					break;
+				case VOLATILE:
+					mover = volatile_(item, latest, hour, snapshot.getFetchedAt(), config);
+					break;
 				default:
 					mover = natureRuneCost == null ? null
 						: highAlch(item, latest, hour, snapshot.getFetchedAt(), natureRuneCost, config);
@@ -61,11 +75,56 @@ public final class MarketScanner
 			}
 		}
 
+		// High alch by profit each; dips and volatile by gp at stake (size of move x price x volume),
+		// so busy, valuable items beat cheap ones with big percentages; dumps and spikes by size of move.
 		Comparator<Mover> order = type == MoverType.HIGH_ALCH
 			? Comparator.comparingLong(Mover::getProfit).reversed()
+			: type == MoverType.DIPS || type == MoverType.VOLATILE
+			? Comparator.comparingDouble((Mover m) -> Math.abs(m.getChangePercent()) * m.getPrice() * m.getVolumePerHour()).reversed()
 			: Comparator.comparingDouble((Mover m) -> Math.abs(m.getChangePercent())).reversed();
 		movers.sort(order);
 		return movers.size() > config.maxResults() ? new ArrayList<>(movers.subList(0, config.maxResults())) : movers;
+	}
+
+	/**
+	 * The last hour's average instant-sell price against today's, so one odd trade isn't enough.
+	 */
+	static Mover dip(ItemMapping item, LatestPrice latest, AveragePrice hour, AveragePrice day, long now, FredFlipsConfig config)
+	{
+		if (day == null || day.getAvgLowPrice() == null || hour.getAvgLowPrice() == null || latest.getLowTime() == null
+			|| isStale(latest.getLowTime(), now, config)
+			|| hour.getLowPriceVolume() < config.minTradesPerHour())
+		{
+			return null;
+		}
+		double change = percentChange(hour.getAvgLowPrice(), day.getAvgLowPrice());
+		if (change > -DIP_PERCENT || change < -MAX_DROP_PERCENT || day.getAvgLowPrice() < MIN_PRICE)
+		{
+			return null;
+		}
+		return new Mover(item.getId(), item.getName(), hour.getAvgLowPrice(), day.getAvgLowPrice(), change, 0,
+			hour.getLowPriceVolume() + hour.getHighPriceVolume(), limitOf(item));
+	}
+
+	/**
+	 * Gap between the latest instant-buy and instant-sell prices, for items trading on both sides.
+	 */
+	static Mover volatile_(ItemMapping item, LatestPrice latest, AveragePrice hour, long now, FredFlipsConfig config)
+	{
+		if (latest.getHigh() == null || latest.getLow() == null || latest.getLow() <= 0
+			|| latest.getHighTime() == null || latest.getLowTime() == null
+			|| isStale(latest.getHighTime(), now, config) || isStale(latest.getLowTime(), now, config)
+			|| hour.getLowPriceVolume() < config.minTradesPerHour() || hour.getHighPriceVolume() < config.minTradesPerHour())
+		{
+			return null;
+		}
+		double spread = percentChange(latest.getHigh(), latest.getLow());
+		if (spread < VOLATILE_SPREAD_PERCENT || spread > MAX_SPREAD_PERCENT || latest.getLow() < MIN_PRICE)
+		{
+			return null;
+		}
+		return new Mover(item.getId(), item.getName(), latest.getLow(), latest.getHigh(), spread, 0,
+			hour.getLowPriceVolume() + hour.getHighPriceVolume(), limitOf(item));
 	}
 
 	static Mover dump(ItemMapping item, LatestPrice latest, AveragePrice hour, AveragePrice day, long now, FredFlipsConfig config)
@@ -77,7 +136,7 @@ public final class MarketScanner
 			return null;
 		}
 		double change = percentChange(latest.getLow(), day.getAvgLowPrice());
-		if (change > -config.moverThresholdPercent())
+		if (change > -config.moverThresholdPercent() || change < -MAX_DROP_PERCENT || day.getAvgLowPrice() < MIN_PRICE)
 		{
 			return null;
 		}
@@ -94,7 +153,7 @@ public final class MarketScanner
 			return null;
 		}
 		double change = percentChange(latest.getHigh(), day.getAvgHighPrice());
-		if (change < config.moverThresholdPercent())
+		if (change < config.moverThresholdPercent() || change > MAX_SPIKE_PERCENT || day.getAvgHighPrice() < MIN_PRICE)
 		{
 			return null;
 		}

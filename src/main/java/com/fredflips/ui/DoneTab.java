@@ -33,17 +33,6 @@ class DoneTab extends JPanel
 	{
 		content.removeAll();
 
-		content.add(Ui.heading("Stats"));
-		JPanel stats = Ui.card();
-		stats.add(Ui.row("Total profit", Ui.gp(ledger.getTotalProfit()) + " gp", Ui.profitColor(ledger.getTotalProfit())));
-		stats.add(Ui.row("Today", Ui.gp(ledger.getProfitSince()) + " gp", Ui.profitColor(ledger.getProfitSince())));
-		int flips = ledger.getCompleted().size();
-		int winRate = flips == 0 ? 0 : ledger.getWins() * 100 / flips;
-		stats.add(Ui.row("Flips", flips + " (" + winRate + "% profitable)"));
-		stats.add(Ui.row("Losing flips", String.valueOf(ledger.getLosses()), ledger.getLosses() > 0 ? Ui.BAD : Color.WHITE));
-		stats.add(Ui.row("GE tax paid", Ui.gp(ledger.getTaxPaid()) + " gp"));
-		Ui.addSpaced(content, stats);
-
 		content.add(Ui.heading("Completed flips"));
 		if (ledger.getCompleted().isEmpty())
 		{

@@ -40,9 +40,29 @@ public final class FlipFinder
 	 */
 	public static List<FlipCandidate> find(MarketSnapshot snapshot, FredFlipsConfig config)
 	{
-		List<FlipCandidate> flips = findAll(snapshot, config);
-		flips.sort(config.sortOrder().getComparator().reversed());
+		List<FlipCandidate> flips = new ArrayList<>();
+		for (FlipCandidate flip : findAll(snapshot, config, config.flipPreset().isShowsRiskySignals()))
+		{
+			if (passesListFilters(flip, config))
+			{
+				flips.add(flip);
+			}
+		}
+		flips.sort(config.sortOrder().getComparator());
 		return flips.size() > config.maxResults() ? new ArrayList<>(flips.subList(0, config.maxResults())) : flips;
+	}
+
+	/**
+	 * The Filter panel: preset, price and profit floors, F2P, tax-free and affordability.
+	 */
+	static boolean passesListFilters(FlipCandidate flip, FredFlipsConfig config)
+	{
+		return config.flipPreset().getRule().test(flip)
+			&& flip.getBuyPrice() >= config.flipMinBuyPrice().getMinimum()
+			&& flip.getPotentialProfit() >= config.flipMinProfit().getMinimum()
+			&& (!config.flipF2pOnly() || !flip.isMembers())
+			&& (!config.flipTaxFreeOnly() || flip.getTax() == 0)
+			&& (!config.flipCapitalFilter() || config.cashStack() <= 0 || flip.getBuyPrice() <= config.cashStack());
 	}
 
 	/**
@@ -50,12 +70,20 @@ public final class FlipFinder
 	 */
 	public static List<FlipCandidate> findAll(MarketSnapshot snapshot, FredFlipsConfig config)
 	{
+		return findAll(snapshot, config, false);
+	}
+
+	/**
+	 * @param allowRiskySignals keep Falling/Spiking/Dumping items even when the safety setting hides them
+	 */
+	static List<FlipCandidate> findAll(MarketSnapshot snapshot, FredFlipsConfig config, boolean allowRiskySignals)
+	{
 		Set<Integer> taxExempt = GeTax.exemptIds(snapshot.getItems());
 		List<FlipCandidate> flips = new ArrayList<>();
 
 		for (ItemMapping item : snapshot.getItems())
 		{
-			FlipCandidate flip = evaluate(item, snapshot, taxExempt.contains(item.getId()), config);
+			FlipCandidate flip = evaluate(item, snapshot, taxExempt.contains(item.getId()), config, allowRiskySignals);
 			if (flip != null)
 			{
 				flips.add(flip);
@@ -68,6 +96,12 @@ public final class FlipFinder
 	 * Works out one item's flip, or returns null if it fails any filter.
 	 */
 	static FlipCandidate evaluate(ItemMapping item, MarketSnapshot snapshot, boolean taxExempt, FredFlipsConfig config)
+	{
+		return evaluate(item, snapshot, taxExempt, config, false);
+	}
+
+	static FlipCandidate evaluate(ItemMapping item, MarketSnapshot snapshot, boolean taxExempt, FredFlipsConfig config,
+		boolean allowRiskySignals)
 	{
 		if (item.isMembers() && !config.membersItems())
 		{
@@ -83,7 +117,7 @@ public final class FlipFinder
 			|| flip.getMargin() < config.minMargin()
 			|| flip.getRoiPercent() < config.minRoiPercent()
 			|| flip.getConfidence() < config.minConfidence()
-			|| (config.hideRiskySignals() && RISKY_SIGNALS.contains(flip.getSignal()))
+			|| (config.hideRiskySignals() && !allowRiskySignals && RISKY_SIGNALS.contains(flip.getSignal()))
 			|| flip.getQuantity() < 1)
 		{
 			return null;
@@ -138,13 +172,20 @@ public final class FlipFinder
 		int confidence = FlipScore.confidence(margin, taxExempt, sellersPerHour, buyersPerHour,
 			Math.max(buyPriceAgeMinutes, sellPriceAgeMinutes), hour, day);
 
+		Double drift = FlipScore.driftPercent(hour, day);
+		double dip = day == null || day.getAvgLowPrice() == null || day.getAvgLowPrice() == 0
+			? 0
+			: (latest.getLow() - day.getAvgLowPrice()) * 100.0 / day.getAvgLowPrice();
+		double surge = dailyVolume <= 0 ? 0 : (sellersPerHour + buyersPerHour) * 24.0 / dailyVolume;
+
 		return new FlipCandidate(
 			item.getId(), item.getName(), item.isMembers(), buyLimit,
 			buyPrice, sellPrice, tax, margin, roiPercent,
 			quantity, Math.max(0, margin) * quantity,
 			sellersPerHour, buyersPerHour, dailyVolume,
 			buyPriceAgeMinutes, sellPriceAgeMinutes,
-			confidence, Tier.fromConfidence(confidence), FlipScore.signal(latest, hour, day));
+			confidence, Tier.fromConfidence(confidence), FlipScore.signal(latest, hour, day),
+			drift == null ? 0 : drift, dip, surge);
 	}
 
 	/**

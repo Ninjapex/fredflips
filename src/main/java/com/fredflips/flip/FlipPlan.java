@@ -27,6 +27,14 @@ public class FlipPlan
 	List<Entry> entries;
 	long capital;
 	int slots;
+	/**
+	 * Epoch millis when the plan was built. Fills after this count towards its progress.
+	 */
+	long createdAt;
+	/**
+	 * The next-best flips that didn't make the plan, best first, used by {@link #swap}.
+	 */
+	List<Entry> alternatives;
 
 	@Value
 	public static class Entry
@@ -89,7 +97,35 @@ public class FlipPlan
 		}
 
 		options.sort(Comparator.comparingLong(Entry::getExpectedProfit).reversed());
-		List<Entry> chosen = new ArrayList<>(options.subList(0, Math.min(freeSlots, options.size())));
-		return new FlipPlan(chosen, capital, freeSlots);
+		int count = Math.min(freeSlots, options.size());
+		List<Entry> chosen = new ArrayList<>(options.subList(0, count));
+		List<Entry> spare = new ArrayList<>(options.subList(count, options.size()));
+		return new FlipPlan(chosen, capital, freeSlots, System.currentTimeMillis(), spare);
+	}
+
+	/**
+	 * Replaces one item with the best flip not already in the plan. Everything else, including progress
+	 * (which counts fills since the plan was built), stays as it is. Returns this plan if there's nothing to swap in.
+	 */
+	public FlipPlan swap(int itemId)
+	{
+		if (alternatives.isEmpty())
+		{
+			return this;
+		}
+		List<Entry> updated = new ArrayList<>();
+		List<Entry> spare = new ArrayList<>(alternatives);
+		for (Entry entry : entries)
+		{
+			if (entry.getFlip().getItemId() == itemId && !spare.isEmpty())
+			{
+				updated.add(spare.remove(0));
+			}
+			else
+			{
+				updated.add(entry);
+			}
+		}
+		return new FlipPlan(updated, capital, slots, createdAt, spare);
 	}
 }

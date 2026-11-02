@@ -10,6 +10,8 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum ChartPeriod
 {
+	HOURS_2("2h", "5m", 24),
+	HOURS_4("4h", "5m", 48),
 	DAY("24h", "5m", 288),
 	WEEK("7d", "1h", 168),
 	MONTH("30d", "6h", 120);

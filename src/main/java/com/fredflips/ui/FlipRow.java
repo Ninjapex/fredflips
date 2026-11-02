@@ -10,47 +10,62 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.SwingConstants;
 import javax.swing.border.EmptyBorder;
 import net.runelite.client.game.ItemManager;
-import net.runelite.client.ui.ColorScheme;
 
 /**
- * One flip in the list. Click it to open the item in the Item tab.
+ * One flip in the list:
+ * <pre>
+ * [icon] Name                     84
+ *        Buy:  2.77B              now
+ *        Sell: 2.79B               3m
+ *        +16.57M                 ~19m
+ *        Tier A - Stable
+ * </pre>
+ * Click it to open the item in the Item tab.
  */
 class FlipRow extends JPanel
 {
-	FlipRow(FlipCandidate flip, ItemManager itemManager, PanelActions actions)
+	private static final long MINUTES_PER_HOUR = 60;
+
+	FlipRow(FlipCandidate flip, ItemManager itemManager, PanelActions actions, boolean alternate)
 	{
-		setLayout(new BorderLayout(6, 0));
-		setBorder(new EmptyBorder(5, 5, 5, 5));
-		setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		Color background = alternate ? Ui.ROW_ALT_BG : Ui.ROW_BG;
+		setLayout(new BorderLayout(8, 0));
+		setBorder(new EmptyBorder(8, 10, 8, 10));
+		setBackground(background);
 		setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 		setToolTipText(tooltip(flip));
 
 		JLabel icon = new JLabel();
-		icon.setPreferredSize(new Dimension(36, 32));
+		icon.setPreferredSize(new Dimension(32, 32));
+		icon.setVerticalAlignment(SwingConstants.TOP);
 		itemManager.getImage(flip.getItemId()).addTo(icon);
 		add(icon, BorderLayout.WEST);
 
-		JPanel text = new JPanel(new GridLayout(4, 1));
+		JPanel text = new JPanel(new GridLayout(0, 1, 0, 1));
 		text.setOpaque(false);
 
-		JPanel titleLine = new JPanel(new BorderLayout());
-		titleLine.setOpaque(false);
-		titleLine.add(Ui.label(flip.getName(), Color.WHITE), BorderLayout.CENTER);
-		titleLine.add(Ui.label("+" + Ui.shortGp(flip.getPotentialProfit()), Ui.GOOD), BorderLayout.EAST);
-		text.add(titleLine);
+		JLabel name = Ui.bold(flip.getName(), Color.WHITE);
+		JLabel score = Ui.bold(String.valueOf(flip.getConfidence()), Ui.scoreColor(flip.getConfidence()));
+		score.setToolTipText("Confidence 0-100 (tier " + flip.getTier() + ")");
+		text.add(Ui.split(name, score));
 
-		text.add(Ui.muted("Buy " + Ui.gp(flip.getBuyPrice()) + "  Sell " + Ui.gp(flip.getSellPrice())));
-		text.add(Ui.muted(String.format("Margin %s (%.1f%%)  x%s",
-			Ui.gp(flip.getMargin()), flip.getRoiPercent(), Ui.gp(flip.getQuantity()))));
+		text.add(Ui.split(
+			Ui.label("<html><b>Buy:</b>&nbsp; " + Ui.shortGp(flip.getBuyPrice()) + "</html>", Ui.BUY),
+			Ui.label(Ui.age(flip.getBuyPriceAgeMinutes()), Ui.MUTED)));
+		text.add(Ui.split(
+			Ui.label("<html><b>Sell:</b>&nbsp; " + Ui.shortGp(flip.getSellPrice()) + "</html>", Ui.GOOD),
+			Ui.label(Ui.age(flip.getSellPriceAgeMinutes()), Ui.MUTED)));
 
-		JPanel scoreLine = new JPanel(new BorderLayout());
-		scoreLine.setOpaque(false);
-		scoreLine.add(Ui.label("Tier " + flip.getTier() + " - " + flip.getConfidence() + "% conf.",
-			flip.getTier().getColor()), BorderLayout.WEST);
-		scoreLine.add(Ui.label(flip.getSignal().getDisplayName(), flip.getSignal().getColor()), BorderLayout.EAST);
-		text.add(scoreLine);
+		JLabel eta = Ui.label("~" + Ui.age(estimatedMinutes(flip)), Ui.MUTED);
+		eta.setToolTipText("Rough time to buy and sell the suggested quantity, from the last hour's volume");
+		text.add(Ui.split(Ui.label(Ui.signedShortGp(flip.getPotentialProfit()), Ui.profitColor(flip.getPotentialProfit())), eta));
+
+		JLabel signal = Ui.label("Tier " + flip.getTier() + " - " + flip.getSignal().getDisplayName(), Ui.SIGNAL);
+		signal.setForeground(flip.getSignal().getColor());
+		text.add(signal);
 
 		add(text, BorderLayout.CENTER);
 
@@ -65,32 +80,44 @@ class FlipRow extends JPanel
 			@Override
 			public void mouseEntered(MouseEvent e)
 			{
-				setBackground(ColorScheme.DARK_GRAY_HOVER_COLOR);
+				setBackground(Ui.HOVER_BG);
 			}
 
 			@Override
 			public void mouseExited(MouseEvent e)
 			{
-				setBackground(ColorScheme.DARKER_GRAY_COLOR);
+				setBackground(background);
 			}
 		});
+	}
+
+	/**
+	 * Time to buy the suggested quantity (filled by sellers) plus time to sell it (filled by buyers).
+	 */
+	static long estimatedMinutes(FlipCandidate flip)
+	{
+		long quantity = Math.max(1, flip.getQuantity());
+		long buy = quantity * MINUTES_PER_HOUR / Math.max(1, flip.getSellersPerHour());
+		long sell = quantity * MINUTES_PER_HOUR / Math.max(1, flip.getBuyersPerHour());
+		return buy + sell;
 	}
 
 	private static String tooltip(FlipCandidate flip)
 	{
 		return "<html>"
 			+ "<b>" + flip.getName() + "</b><br>"
-			+ "Buy at: " + Ui.gp(flip.getBuyPrice()) + " gp (last trade " + flip.getBuyPriceAgeMinutes() + "m ago)<br>"
-			+ "Sell at: " + Ui.gp(flip.getSellPrice()) + " gp (last trade " + flip.getSellPriceAgeMinutes() + "m ago)<br>"
+			+ "Buy at: <font color='#FF7070'>" + Ui.gp(flip.getBuyPrice()) + " gp</font> (traded " + Ui.age(flip.getBuyPriceAgeMinutes()) + ")<br>"
+			+ "Sell at: <font color='#00C27A'>" + Ui.gp(flip.getSellPrice()) + " gp</font> (traded " + Ui.age(flip.getSellPriceAgeMinutes()) + ")<br>"
 			+ "GE tax: " + Ui.gp(flip.getTax()) + " gp each<br>"
-			+ "Margin after tax: " + Ui.gp(flip.getMargin()) + " gp each<br>"
+			+ "Margin after tax: " + Ui.gp(flip.getMargin()) + " gp each (" + String.format("%.2f", flip.getRoiPercent()) + "%)<br>"
 			+ "Buy limit: " + (flip.getBuyLimit() > 0 ? Ui.gp(flip.getBuyLimit()) + " per 4h" : "unknown") + "<br>"
 			+ "Sellers last hour: " + Ui.gp(flip.getSellersPerHour())
 			+ " &nbsp;Buyers last hour: " + Ui.gp(flip.getBuyersPerHour()) + "<br>"
 			+ "Suggested qty: " + Ui.gp(flip.getQuantity())
 			+ " = " + Ui.gp(flip.getPotentialProfit()) + " gp profit<br>"
+			+ "Confidence: " + flip.getConfidence() + " (tier " + flip.getTier() + ")<br>"
 			+ "Signal: " + flip.getSignal().getDescription() + "<br>"
-			+ "<i>Click for chart, indicators and volume</i>"
+			+ "<font color='#666666'>Click for chart, indicators and volume</font>"
 			+ "</html>";
 	}
 }

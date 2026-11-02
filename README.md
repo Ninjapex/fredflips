@@ -10,32 +10,24 @@ settings.
 
 | Tab | What it does |
 |---|---|
-| **Flips** | Recommended flips with buy/sell prices, margin after tax, quantity, confidence, tier and signal |
-| **Plan** | Splits your Cash stack across your free GE slots using the safest flips, and tracks their progress |
-| **Active** | Your 8 GE slots live: status, fill progress, time waiting, and whether your price is still competitive. Plus items you've bought but not sold |
-| **Done** | Completed flips with real profit after tax, today's and all-time stats, and the full trade log |
-| **Movers** | Dumps, spikes and high alch profits |
-| **Item** | Search any item: live prices, a 24h/7d/30d chart, technical indicators and volume |
-| **Money** | Processing money makers (enchanting, fletching, herblore, crafting...) ranked by live GP/hr |
+| **Plan** | Type your GP, press Build plan: FredFlips splits it across your free GE slots using the safest flips, with live bought/sold progress, a status badge and a Swap button per item |
+| **Item** | Search any item: live prices, buy-limit usage, a 2h-30d chart, technical indicators, volume, 90-day range, trend, liquidity and a price projection. Star it to add it to Favs |
+| **Favs** | Your watchlist with live prices |
+| **Flips** | Recommended flips, 10 per page, with a Filter panel: 12 presets, 11 sorts, min price, min profit, F2P only, tax-free only and "only what I can afford" |
+| **Trades** | Profit and performance for today, this week, this month or all time; your GE slots (Active), completed flips and trade log (Recent), and profit by item (Margin) |
+| **Other** | Dumps, Spikes, Dips, Volatile, High alch, Decant, Item sets, ATL (all-time lows), Arbitrage (time of day) and Money makers |
 
-## Money makers
+## On the Grand Exchange
 
-The Money tab uses about 300 buy-make-sell methods from the OSRS Wiki's
-[money making guides](https://oldschool.runescape.wiki/w/Money_making_guide), with live GE prices. Guides that
-pick the best option on the fly (Plank Make, Superglass Make, Tan Leather, enchanting topaz and dragonstone
-jewellery, gem-tipped dragon bolts, poisoning ammunition and others) are split into one method per option, so
-FredFlips can rank them all. By default only bank-standing methods are shown.
+- Each active offer is outlined green, grey or red by how competitive its price is, with a time-on-sale timer,
+  a fill counter and the time since its last fill. Hover it for details. Colours and timings are adjustable.
+- The price box shows a clickable ladder - Quick, FredFlips (or Plan) and Patient - with hotkeys (I, O, P by
+  default). The quantity box suggests the plan's or FredFlips' quantity, never more than your buy limit allows.
+- Find on GE fills in the item search for you, and picking an item opens it in the Item tab.
+- A +gp / -gp drop floats above the GE when a sale completes a flip.
+- Hovering an item you bought in your inventory shows what you paid and its profit if sold now.
 
-- **Instant:** inputs bought at the instant-buy price, outputs sold at the instant-sell price, minus GE tax (worst case).
-- **Realistic:** instant GP/hr, cut down when an input's buy limit or the output's hourly market volume can't
-  keep up with a full hour. This is the default ranking.
-- **With offers:** inputs and outputs traded with patient offers (best case).
-
-Actions per hour are the wiki's estimates. When you're logged in, methods you don't have the levels for are
-hidden. To refresh the list of methods, run `python tools/build_money_makers.py`.
-
-The money maker data in `src/main/resources/com/fredflips/money_makers.json` comes from the OSRS Wiki and is
-licensed [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/), not BSD.
+Nothing is entered until you click or press a hotkey, and you always press Enter and Confirm yourself.
 
 ## Confidence, tiers and signals
 
@@ -71,16 +63,6 @@ last 24h, buyer/seller split, 15-day daily average).
 | Potential profit | Margin x quantity |
 
 Hover over an item for more detail, or click it to open it in the Item tab.
-
-## GE helpers
-
-- **Find on GE:** click it on a Plan entry or in the Item tab, then click Buy on an empty GE slot. The item
-  search is filled in for you.
-- **Price and quantity clicks:** when the GE's quantity or price box opens, a clickable line shows the plan's
-  numbers (or FredFlips' usual prices). Click it to put the number in the box.
-
-Nothing is entered until you click, and you always press Enter and Confirm yourself. Both can be turned off
-under *GE helpers*.
 
 ## Trade tracking
 

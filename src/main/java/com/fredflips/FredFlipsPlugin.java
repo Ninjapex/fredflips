@@ -1,6 +1,9 @@
 package com.fredflips;
 
+import com.fredflips.flip.DecantScanner;
 import com.fredflips.flip.FlipCandidate;
+import com.fredflips.flip.HistoryScanner;
+import com.fredflips.flip.ItemSets;
 import com.fredflips.flip.FlipFinder;
 import com.fredflips.flip.FlipPlan;
 import com.fredflips.flip.GeTax;
@@ -15,6 +18,7 @@ import com.fredflips.insights.ItemInsights;
 import com.fredflips.money.MoneyMakers;
 import com.fredflips.money.MoneyResult;
 import com.fredflips.money.MoneySort;
+import com.fredflips.trades.BuyLimits;
 import com.fredflips.trades.FlipLedger;
 import com.fredflips.trades.OfferSnapshot;
 import com.fredflips.trades.OfferStatus;
@@ -24,6 +28,9 @@ import com.fredflips.trades.TradeTracker;
 import com.fredflips.ui.FredFlipsPanel;
 import com.fredflips.ui.PanelActions;
 import com.fredflips.wiki.ItemMapping;
+import com.fredflips.wiki.AveragePrice;
+import com.fredflips.wiki.LatestPrice;
+import com.fredflips.wiki.TimeseriesPoint;
 import com.fredflips.wiki.MarketSnapshot;
 import com.fredflips.wiki.WikiPriceClient;
 import com.google.inject.Provides;
@@ -41,6 +48,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -68,6 +76,9 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.input.KeyManager;
+import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.util.HotkeyListener;
 import net.runelite.client.util.ImageUtil;
 
 @Slf4j
@@ -78,6 +89,13 @@ import net.runelite.client.util.ImageUtil;
 )
 public class FredFlipsPlugin extends Plugin implements PanelActions
 {
+	private static final String FAVOURITES_KEY = "favourites";
+	// ATL and Arbitrage look at this many of the most-traded items.
+	private static final int HISTORY_ITEMS = 50;
+	private static final long HISTORY_CACHE_MILLIS = 30 * 60_000L;
+
+	private final Map<String, CachedSeries> historyCache = new ConcurrentHashMap<>();
+
 	// Prices on these worlds don't match the main game, so trades there aren't tracked.
 	private static final Set<WorldType> UNTRACKED_WORLDS = EnumSet.of(
 		WorldType.SEASONAL, WorldType.DEADMAN, WorldType.BETA_WORLD, WorldType.FRESH_START_WORLD,
@@ -113,6 +131,54 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 	@Inject
 	private MoneyMakers moneyMakers;
 
+	@Inject
+	private ItemSets itemSets;
+
+	@Inject
+	private OverlayManager overlayManager;
+
+	@Inject
+	private GeSlotOverlay geSlotOverlay;
+
+	@Inject
+	private KeyManager keyManager;
+
+	@Inject
+	private GpDropOverlay gpDropOverlay;
+
+	@Inject
+	private InventoryCostOverlay inventoryCostOverlay;
+
+	// Read-only copy of what you're holding, by item, for the inventory tooltip.
+	private volatile Map<Integer, FlipLedger.OpenPosition> holdingsView = Collections.emptyMap();
+
+	// Price hotkeys only act while the GE price box is open, so they don't get in the way anywhere else.
+	private final HotkeyListener quickKey = priceHotkey(() -> config.geQuickKey(), 0);
+	private final HotkeyListener fredFlipsKey = priceHotkey(() -> config.geFredFlipsKey(), 1);
+	private final HotkeyListener patientKey = priceHotkey(() -> config.gePatientKey(), 2);
+
+	private HotkeyListener priceHotkey(java.util.function.Supplier<net.runelite.client.config.Keybind> key, int which)
+	{
+		return new HotkeyListener(key)
+		{
+			@Override
+			public void hotkeyPressed()
+			{
+				if (config.gePriceHotkeys())
+				{
+					geHelper.pressHotkey(which);
+				}
+			}
+		};
+	}
+
+	private void updateHotkeyLabels()
+	{
+		geHelper.setQuickKeyLabel(config.geQuickKey().toString());
+		geHelper.setFredFlipsKeyLabel(config.geFredFlipsKey().toString());
+		geHelper.setPatientKeyLabel(config.gePatientKey().toString());
+	}
+
 	private FredFlipsPanel panel;
 	private NavigationButton navButton;
 	private ScheduledFuture<?> refreshTask;
@@ -127,6 +193,8 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 	private final TradeTracker tracker = new TradeTracker();
 	private final List<Trade> trades = new ArrayList<>();
 	private String loadedProfile;
+	// Read-only copy of the GE slots for the overlay, which draws every frame.
+	private volatile Map<Integer, OfferSnapshot> slotView = Collections.emptyMap();
 
 	// Your real skill levels by lower-case name, filled in from StatChanged while logged in.
 	private final Map<String, Integer> skillLevels = new ConcurrentHashMap<>();
@@ -152,6 +220,13 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 		geHelper.setSearchEnabled(config.geSearchHelper());
 		geHelper.setSuggestionsEnabled(config.gePriceHelper());
 		geHelper.setSuggestions(this::geSuggestion);
+		overlayManager.add(geSlotOverlay);
+		overlayManager.add(gpDropOverlay);
+		overlayManager.add(inventoryCostOverlay);
+		keyManager.registerKeyListener(quickKey);
+		keyManager.registerKeyListener(fredFlipsKey);
+		keyManager.registerKeyListener(patientKey);
+		updateHotkeyLabels();
 
 		executor.execute(() ->
 		{
@@ -169,6 +244,12 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 	{
 		cancelRefresh();
 		geHelper.setSuggestions(null);
+		overlayManager.remove(geSlotOverlay);
+		overlayManager.remove(gpDropOverlay);
+		overlayManager.remove(inventoryCostOverlay);
+		keyManager.unregisterKeyListener(quickKey);
+		keyManager.unregisterKeyListener(fredFlipsKey);
+		keyManager.unregisterKeyListener(patientKey);
 		clientToolbar.removeNavigation(navButton);
 		navButton = null;
 		panel = null;
@@ -193,7 +274,8 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
-		if (!FredFlipsConfig.GROUP.equals(event.getGroup()) || TradeStore.isStorageKey(event.getKey()))
+		if (!FredFlipsConfig.GROUP.equals(event.getGroup()) || TradeStore.isStorageKey(event.getKey())
+			|| FAVOURITES_KEY.equals(event.getKey()))
 		{
 			return;
 		}
@@ -208,14 +290,16 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 				onSwing(p -> p.setSortOrder(order));
 				break;
 			case "showPlanTab":
-			case "showActiveTab":
-			case "showDoneTab":
-			case "showMoversTab":
 			case "showItemTab":
+			case "showFavsTab":
+			case "showTradesTab":
+			case "showOtherTab":
 				onSwing(p -> p.applyTabVisibility(config));
 				return;
-			case "showMoneyTab":
-				onSwing(p -> p.applyTabVisibility(config));
+			case "geQuickKey":
+			case "geFredFlipsKey":
+			case "gePatientKey":
+				updateHotkeyLabels();
 				return;
 			case "geSearchHelper":
 				geHelper.setSearchEnabled(config.geSearchHelper());
@@ -313,10 +397,20 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 					isBuy(offer.getState()), offer.getPrice(), offer.getTotalQuantity(), offer.getQuantitySold(),
 					offer.getSpent(), toStatus(offer.getState()), 0, 0);
 				newTrades = tracker.onSlotChanged(slot, snapshot, now);
-				trades.addAll(newTrades);
+				if (newTrades.stream().anyMatch(trade -> !trade.isBuy()))
+				{
+					long before = FlipLedger.build(trades, taxExempt, 0).getTotalProfit();
+					trades.addAll(newTrades);
+					gpDropOverlay.addDrop(FlipLedger.build(trades, taxExempt, 0).getTotalProfit() - before);
+				}
+				else
+				{
+					trades.addAll(newTrades);
+				}
 			}
 
 			Map<Integer, OfferSnapshot> slotsCopy = new HashMap<>(tracker.getSlots());
+			slotView = slotsCopy;
 			List<Trade> tradesCopy = newTrades.isEmpty() ? null : new ArrayList<>(trades);
 			executor.execute(() ->
 			{
@@ -350,6 +444,180 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 	}
 
 	@Override
+	public void changeSetting(String key, Object value)
+	{
+		configManager.setConfiguration(FredFlipsConfig.GROUP, key, value);
+	}
+
+	@Override
+	public void toggleFavourite(int itemId)
+	{
+		List<Integer> favourites = favouriteIds();
+		if (!favourites.remove((Integer) itemId))
+		{
+			favourites.add(itemId);
+		}
+		StringBuilder csv = new StringBuilder();
+		for (Integer id : favourites)
+		{
+			csv.append(csv.length() == 0 ? "" : ",").append(id);
+		}
+		configManager.setConfiguration(FredFlipsConfig.GROUP, FAVOURITES_KEY, csv.toString());
+		onSwing(FredFlipsPanel::refreshFavouriteStar);
+		executor.execute(this::showFavourites);
+	}
+
+	@Override
+	public boolean isFavourite(int itemId)
+	{
+		return favouriteIds().contains(itemId);
+	}
+
+	/**
+	 * Starred item IDs in the order they were starred. Stored as a hidden setting, not shown in the config panel.
+	 */
+	private List<Integer> favouriteIds()
+	{
+		List<Integer> ids = new ArrayList<>();
+		String csv = configManager.getConfiguration(FredFlipsConfig.GROUP, FAVOURITES_KEY);
+		if (csv != null)
+		{
+			for (String part : csv.split(","))
+			{
+				try
+				{
+					ids.add(Integer.parseInt(part.trim()));
+				}
+				catch (NumberFormatException ignored)
+				{
+					// Skip anything that isn't an item ID.
+				}
+			}
+		}
+		return ids;
+	}
+
+	private void showFavourites()
+	{
+		MarketSnapshot snapshot = lastSnapshot;
+		if (snapshot == null)
+		{
+			return;
+		}
+		List<FlipCandidate> favourites = new ArrayList<>();
+		for (int id : favouriteIds())
+		{
+			ItemMapping item = itemsById.get(id);
+			FlipCandidate numbers = item == null ? null : FlipFinder.calculate(item, snapshot, taxExempt.contains(id), config.cashStack());
+			if (numbers != null)
+			{
+				favourites.add(numbers);
+			}
+		}
+		onSwing(p -> p.showFavourites(favourites));
+	}
+
+	@Override
+	public void loadHistory(boolean arbitrage)
+	{
+		MarketSnapshot snapshot = lastSnapshot;
+		if (snapshot == null)
+		{
+			return;
+		}
+		// Most-traded items by gp value, so the history requests go where they matter.
+		List<ItemMapping> candidates = new ArrayList<>();
+		for (ItemMapping item : snapshot.getItems())
+		{
+			if ((config.membersItems() || !item.isMembers()) && snapshot.getOneDay() != null && snapshot.getOneDay().get(item.getId()) != null
+				&& snapshot.getLatest().get(item.getId()) != null && snapshot.getLatest().get(item.getId()).getLow() != null)
+			{
+				candidates.add(item);
+			}
+		}
+		// Half by gp traded (the big items), half by number of trades (everyday items like runes and potions).
+		java.util.LinkedHashSet<ItemMapping> chosenSet = new java.util.LinkedHashSet<>();
+		candidates.sort(Comparator.comparingDouble((ItemMapping item) -> gpTradedPerDay(snapshot, item.getId())).reversed());
+		chosenSet.addAll(candidates.subList(0, Math.min(HISTORY_ITEMS / 2, candidates.size())));
+		candidates.sort(Comparator.comparingLong((ItemMapping item) -> tradesPerDay(snapshot, item.getId())).reversed());
+		for (ItemMapping item : candidates)
+		{
+			if (chosenSet.size() >= HISTORY_ITEMS)
+			{
+				break;
+			}
+			chosenSet.add(item);
+		}
+		List<ItemMapping> chosen = new ArrayList<>(chosenSet);
+
+		String timestep = arbitrage ? "1h" : "24h";
+		List<CompletableFuture<HistoryScanner.Result>> futures = new ArrayList<>();
+		for (ItemMapping item : chosen)
+		{
+			LatestPrice latest = snapshot.getLatest().get(item.getId());
+			futures.add(cachedTimeseries(item.getId(), timestep).thenApply(points -> arbitrage
+				? HistoryScanner.timeOfDay(item.getId(), item.getName(), points, taxExempt.contains(item.getId()), ZoneId.systemDefault())
+				: HistoryScanner.allTimeLow(item.getId(), item.getName(), points, latest.getLow(),
+					latest.getHigh() == null ? latest.getLow() : latest.getHigh()))
+				.exceptionally(error -> null));
+		}
+		CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).whenComplete((ignored, error) ->
+		{
+			List<HistoryScanner.Result> results = new ArrayList<>();
+			for (CompletableFuture<HistoryScanner.Result> future : futures)
+			{
+				HistoryScanner.Result result = future.getNow(null);
+				if (result != null)
+				{
+					results.add(result);
+				}
+			}
+			results.sort(arbitrage
+				? Comparator.comparingDouble((HistoryScanner.Result r) -> r.getProfitEach() * r.getPercent()).reversed()
+				: Comparator.comparingDouble(HistoryScanner.Result::getPercent));
+			onSwing(p -> p.showHistory(results, arbitrage));
+		});
+	}
+
+	private static long tradesPerDay(MarketSnapshot snapshot, int itemId)
+	{
+		AveragePrice day = snapshot.getOneDay().get(itemId);
+		return day.getHighPriceVolume() + day.getLowPriceVolume();
+	}
+
+	private static double gpTradedPerDay(MarketSnapshot snapshot, int itemId)
+	{
+		AveragePrice day = snapshot.getOneDay().get(itemId);
+		Long price = day.getAvgLowPrice() != null ? day.getAvgLowPrice() : day.getAvgHighPrice();
+		return price == null ? 0 : (double) price * (day.getHighPriceVolume() + day.getLowPriceVolume());
+	}
+
+	/**
+	 * Price history from the wiki, kept for {@link #HISTORY_CACHE_MILLIS} so reopening a list doesn't refetch it.
+	 */
+	private CompletableFuture<List<TimeseriesPoint>> cachedTimeseries(int itemId, String timestep)
+	{
+		String key = itemId + "/" + timestep;
+		CachedSeries cached = historyCache.get(key);
+		if (cached != null && System.currentTimeMillis() - cached.fetchedAt < HISTORY_CACHE_MILLIS)
+		{
+			return CompletableFuture.completedFuture(cached.points);
+		}
+		return priceClient.fetchTimeseries(itemId, timestep).thenApply(points ->
+		{
+			historyCache.put(key, new CachedSeries(points, System.currentTimeMillis()));
+			return points;
+		});
+	}
+
+	@lombok.Value
+	private static class CachedSeries
+	{
+		List<TimeseriesPoint> points;
+		long fetchedAt;
+	}
+
+	@Override
 	public void changeMoneySort(MoneySort sort)
 	{
 		configManager.setConfiguration(FredFlipsConfig.GROUP, "moneySort", sort);
@@ -373,6 +641,12 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 
 		FlipCandidate numbers = FlipFinder.calculate(item, snapshot, taxExempt.contains(itemId), config.cashStack());
 		panel.openItem(item, numbers);
+		if (item.getLimit() != null && item.getLimit() > 0)
+		{
+			BuyLimits.Usage usage = limitUsage(itemId);
+			long resetIn = usage.getResetsAt() - System.currentTimeMillis();
+			panel.showLimitUsage(itemId, usage.getBought(), item.getLimit(), usage.getBought() == 0 ? 0 : resetIn);
+		}
 		ChartPeriod period = panel.getChartPeriod();
 
 		priceClient.fetchTimeseries(itemId, "1h").whenComplete((hourly, error) ->
@@ -384,6 +658,19 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 				return;
 			}
 			ItemInsights insights = ItemInsights.fromHourly(hourly);
+			long price = numbers != null ? numbers.getBuyPrice()
+				: snapshot.getLatest().get(itemId) != null && snapshot.getLatest().get(itemId).getLow() != null
+				? snapshot.getLatest().get(itemId).getLow() : 0;
+			int buyLimit = item.getLimit() == null ? 0 : item.getLimit();
+			cachedTimeseries(itemId, "24h").whenComplete((daily, dailyError) ->
+			{
+				if (dailyError == null && price > 0)
+				{
+					com.fredflips.insights.LongTermInsights longTerm =
+						com.fredflips.insights.LongTermInsights.of(daily, hourly, price, taxExempt.contains(itemId));
+					onSwing(p -> p.showItemLongTerm(itemId, longTerm, buyLimit));
+				}
+			});
 			onSwing(p -> p.showItemInsights(itemId, insights, numbers));
 			if (period == ChartPeriod.WEEK)
 			{
@@ -481,6 +768,24 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 	}
 
 	@Override
+	public void swapPlanEntry(int itemId)
+	{
+		FlipPlan current = plan;
+		if (current != null)
+		{
+			plan = current.swap(itemId);
+			executor.execute(this::updateTradeViews);
+		}
+	}
+
+	@Override
+	public void setCashStack(long gp)
+	{
+		// The setting is an int, so very large stacks are capped at about 2.1b.
+		configManager.setConfiguration(FredFlipsConfig.GROUP, "cashStack", (int) Math.min(gp, Integer.MAX_VALUE));
+	}
+
+	@Override
 	public void clearTradeLog()
 	{
 		executor.execute(() ->
@@ -525,7 +830,7 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 			if (error != null)
 			{
 				log.warn("Couldn't download prices from the OSRS Wiki", error);
-				onSwing(p -> p.showStatus("Couldn't reach the OSRS Wiki - showing older prices"));
+				onSwing(p -> p.showOffline("Couldn't reach the OSRS Wiki - showing older prices"));
 				return;
 			}
 
@@ -558,6 +863,11 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 			executor.execute(() -> showMovers(p.getMoverType()));
 		});
 		showMoneyMakers();
+		showFavourites();
+		List<DecantScanner.Option> decants = DecantScanner.scan(snapshot, config);
+		onSwing(p -> p.showDecants(decants));
+		List<ItemSets.Option> sets = ItemSets.scan(itemSets.getSets(), snapshot, taxExempt, config);
+		onSwing(p -> p.showItemSets(sets));
 	}
 
 	/**
@@ -630,10 +940,12 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 		if (profile == null)
 		{
 			tracker.restore(null);
+			slotView = Collections.emptyMap();
 			return;
 		}
 		trades.addAll(tradeStore.loadTrades());
 		tracker.restore(tradeStore.loadSlots());
+		slotView = new HashMap<>(tracker.getSlots());
 		log.debug("Loaded {} trades for profile {}", trades.size(), profile);
 	}
 
@@ -653,6 +965,12 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 		long now = System.currentTimeMillis();
 		long startOfToday = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli();
 		FlipLedger ledger = FlipLedger.build(tradesCopy, taxExempt, startOfToday);
+		Map<Integer, FlipLedger.OpenPosition> holdings = new HashMap<>();
+		for (FlipLedger.OpenPosition position : ledger.getOpen())
+		{
+			holdings.put(position.getItemId(), position);
+		}
+		holdingsView = holdings;
 		MarketSnapshot snapshot = lastSnapshot;
 		Set<Integer> exempt = taxExempt;
 		FlipPlan currentPlan = plan;
@@ -664,7 +982,7 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 		{
 			p.showActive(slots, ledger.getOpen(), snapshot == null ? null : snapshot.getLatest(), exempt, staleMinutes, tracking, now);
 			p.showDone(ledger, tradesCopy, now);
-			p.showPlan(currentPlan, message, slots, ledger.getOpen());
+			p.showPlan(currentPlan, message, slots, ledger.getOpen(), tradesCopy);
 		});
 	}
 
@@ -682,7 +1000,9 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 				FlipCandidate flip = entry.getFlip();
 				if (flip.getItemId() == itemId)
 				{
-					return new GeSuggestion("Plan", sell ? flip.getSellPrice() : flip.getBuyPrice(), sell ? null : entry.getQuantity());
+					LatestPrice market = marketPrice(itemId);
+					return new GeSuggestion("Plan", sell ? flip.getSellPrice() : flip.getBuyPrice(), sell ? null : capToLimitLeft(itemId, entry.getQuantity()),
+						quickPrice(market, sell), patientPrice(market, sell));
 				}
 			}
 		}
@@ -698,8 +1018,89 @@ public class FredFlipsPlugin extends Plugin implements PanelActions
 		{
 			return null;
 		}
-		Long quantity = sell || numbers.getQuantity() <= 0 ? null : numbers.getQuantity();
-		return new GeSuggestion("FredFlips", sell ? numbers.getSellPrice() : numbers.getBuyPrice(), quantity);
+		Long quantity = sell || numbers.getQuantity() <= 0 ? null : capToLimitLeft(itemId, numbers.getQuantity());
+		LatestPrice market = snapshot.getLatest().get(itemId);
+		return new GeSuggestion("FredFlips", sell ? numbers.getSellPrice() : numbers.getBuyPrice(), quantity,
+			quickPrice(market, sell), patientPrice(market, sell));
+	}
+
+	/**
+	 * Never suggest buying more than what's left of the item's 4-hour buy limit.
+	 */
+	private Long capToLimitLeft(int itemId, long quantity)
+	{
+		ItemMapping item = itemsById.get(itemId);
+		if (item == null || item.getLimit() == null || item.getLimit() <= 0)
+		{
+			return quantity;
+		}
+		long left = limitUsage(itemId).remaining(item.getLimit());
+		return left <= 0 ? null : Math.min(quantity, left);
+	}
+
+	private BuyLimits.Usage limitUsage(int itemId)
+	{
+		synchronized (tradeLock)
+		{
+			return BuyLimits.usage(trades, itemId, System.currentTimeMillis());
+		}
+	}
+
+	@Subscribe
+	public void onVarbitChanged(net.runelite.api.events.VarbitChanged event)
+	{
+		// Picking an item in the GE search sets this; open it in the Item tab.
+		if (event.getVarpId() != net.runelite.api.gameval.VarPlayerID.TRADINGPOST_SEARCH || !config.geOpenItemOnOffer())
+		{
+			return;
+		}
+		int itemId = event.getValue();
+		if (itemId > 0 && itemsById.containsKey(itemId))
+		{
+			javax.swing.SwingUtilities.invokeLater(() -> openItem(itemId));
+		}
+	}
+
+	/**
+	 * Most likely to fill now: pay the latest instant-buy price, or sell at the latest instant-sell price.
+	 */
+	private static Long quickPrice(LatestPrice market, boolean sell)
+	{
+		return market == null ? null : sell ? market.getLow() : market.getHigh();
+	}
+
+	/**
+	 * A better price that may take longer: bid the latest instant-sell price, or ask the latest instant-buy price.
+	 */
+	private static Long patientPrice(LatestPrice market, boolean sell)
+	{
+		return market == null ? null : sell ? market.getHigh() : market.getLow();
+	}
+
+	Map<Integer, FlipLedger.OpenPosition> getHoldingsView()
+	{
+		return holdingsView;
+	}
+
+	boolean isTaxExempt(int itemId)
+	{
+		return taxExempt.contains(itemId);
+	}
+
+	Map<Integer, OfferSnapshot> getSlotView()
+	{
+		return slotView;
+	}
+
+	LatestPrice marketPrice(int itemId)
+	{
+		MarketSnapshot snapshot = lastSnapshot;
+		return snapshot == null ? null : snapshot.getLatest().get(itemId);
+	}
+
+	GeSuggestion suggestionFor(int itemId, boolean sell)
+	{
+		return geSuggestion(itemId, sell);
 	}
 
 	private String itemName(int itemId)
